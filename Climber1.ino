@@ -13,8 +13,12 @@
 #define SHUTTLE_MOTOR 9
 //#define M1  A0
 //#define M2  A1
+#define SHUTTLE_UP_SPEED    2260
+#define SHUTTLE_DOWN_SPEED  700
+#define SHUTTLE_STOP_SPEED  1500
 
-String COMMANDS = "AUTDBW";
+String COMMANDS = "AUDW";
+String IMMEDIATE_COMMANDS = "AUDWTB";
 String DEBUG_COMMANDS = "LSCA";
 
 volatile int top_state = LOW;
@@ -78,8 +82,8 @@ void setup()
   digitalWrite(TOP_LIMIT, HIGH);
   digitalWrite(BOTTOM_LIMIT, HIGH );
   digitalWrite(A0, HIGH);
+  digitalWrite(A1, HIGH);
   digitalWrite(A2, HIGH);
-  digitalWrite(A3, HIGH);
   
   PCintPort::attachInterrupt(TOP_LIMIT, &pcInt2, RISING);
   PCintPort::attachInterrupt(BOTTOM_LIMIT, &pcInt2, FALLING);
@@ -98,6 +102,17 @@ void setup()
 void loop() 
 {
   // put your main code here, to run repeatedly: 
+  updateBodyServo();
+  
+  // Check for incoming serial data
+  while (Serial.available() > 0)
+  {
+    handleSerial();
+  }
+}
+
+void updateBodyServo()
+{
   if (servoAngle > desiredAngle)
     servoDir = -1;
   else if (servoAngle < desiredAngle)
@@ -106,12 +121,6 @@ void loop()
     servoDir = 0;
     
   bodyServo.write(servoAngle);
-  
-  // Check for incoming serial data
-  while (Serial.available() > 0)
-  {
-    handleSerial();
-  }
 }
 
 void ledOn(char pos)
@@ -178,15 +187,126 @@ void debugIndicators()
 
 void debugShuttle()
 {
+  Serial.println();
+  Serial.println();
+  while (!exitScript)
+  {
+    encoderCount = 0;
+    shuttleMotor.writeMicroseconds(SHUTTLE_DOWN_SPEED);
+    ledOn(0);
+    delay(2000);
+    Serial.print("Encoder count: ");
+    Serial.println(encoderCount);
+    
+    encoderCount = 0;
+    shuttleMotor.writeMicroseconds(SHUTTLE_UP_SPEED);
+    ledOn(2);
+    delay(2000);
+    Serial.print("Encoder count: ");
+    Serial.println(encoderCount);
+    
+    // Check for incoming serial data
+    if (Serial.available() > 0)
+    {
+      handleSerial();
+    }
+  }
+  shuttleMotor.writeMicroseconds(SHUTTLE_STOP_SPEED);
+  ledOn(-1);  // Invalid number turns all off and none back on
+  exitScript = false;
 }
 
 void debugArm()
 {
+  Serial.println();
+  Serial.println();
+  while (!exitScript)
+  {
+    bodyServo.write(70);
+    ledOn(0);
+    delay(2000);
+    bodyServo.write(110);
+    ledOn(2);
+    delay(2000);
+    // Check for incoming serial data
+    if (Serial.available() > 0)
+    {
+      handleSerial();
+    }
+  }
+  bodyServo.write(90);
+  ledOn(-1);  // Invalid number turns all off and none back on
+  exitScript = false;
+}
+
+void moveToAngle( int value )
+{
+  desiredAngle = value;
+  
+  while ( servoAngle != desiredAngle )
+  {
+    updateBodyServo();
+  }
+}
+
+void shuttleUpCount( int value )
+{
+  bottomLimitPressed = false;
+  encoderCount = 0;
+  ledOn(2);
+  while (!exitScript && encoderCount < value && !topLimitPressed)
+  {
+    shuttleMotor.writeMicroseconds(SHUTTLE_UP_SPEED);
+    /*
+    // Check for incoming serial data
+    if (Serial.available() > 0)
+    {
+      handleSerial();
+    }
+    */
+  }
+  shuttleMotor.writeMicroseconds(SHUTTLE_STOP_SPEED);
+  ledOn(-1);  // Invalid number turns all off and none back on
+  Serial.print("Encoder count: ");
+  Serial.println(encoderCount);
+  exitScript = false;
+}
+
+void shuttleDownCount( int value )
+{
+  topLimitPressed = false;
+  encoderCount = 0;
+  ledOn(0);
+  while (!exitScript && encoderCount < value && !bottomLimitPressed)
+  {
+    shuttleMotor.writeMicroseconds(SHUTTLE_DOWN_SPEED);
+    /*
+    // Check for incoming serial data
+    if (Serial.available() > 0)
+    {
+      handleSerial();
+    }
+    */
+  }
+  shuttleMotor.writeMicroseconds(SHUTTLE_STOP_SPEED);
+  ledOn(-1);  // Invalid number turns all off and none back on
+  Serial.print("Encoder count: ");
+  Serial.println(encoderCount);
+  exitScript = false;
+}
+
+void wait( int seconds )
+{
+  ledOn(1);
+  delay(seconds * 1000);
+  ledOn(-1);
 }
 
 void handleSerial()
 {
   static char lastChar;
+  int value;
+  
   char c = Serial.read();
   
   if ( c != '\r' && c != '\n' & c != ' ' )
@@ -227,7 +347,7 @@ void handleSerial()
     }
     else if ( COMMANDS.indexOf(c) > -1 )
     {
-      int value = Serial.parseInt();
+      value = Serial.parseInt();
       Serial.print("   int: ");
       Serial.println(value);
     }
@@ -239,26 +359,32 @@ void handleSerial()
   else
     return;
   
-  if (immediateMode && COMMANDS.indexOf(c) > -1)
+  if (immediateMode && IMMEDIATE_COMMANDS.indexOf(c) > -1)
   {
     switch(c)
     {
       case 'A':  // move to angle
+        moveToAngle(value);
         break;
       
       case 'U':  // shuttle up count or top limit
+        shuttleUpCount(value);
         break;
         
       case 'T':  // shuttle up to top limit
+        shuttleUpCount(32767);
         break;
         
       case 'D':  // shuttle down count or bottom limit
+        shuttleDownCount(value);
         break;
         
       case 'B':  // shuttle down to bottom limit
+        shuttleDownCount(32767);
         break;
         
       case 'W':  // Wait seconds
+        wait(value);
         break;
     }
   }
