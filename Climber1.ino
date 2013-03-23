@@ -1,4 +1,5 @@
-//#include <Arduino.h>
+#define NO_PORTB_PINCHANGES
+#define NO_PORTC_PINCHANGES
 #include <PinChangeInt.h>
 #include <FlexiTimer2.h>
 #include <Servo.h>
@@ -10,6 +11,8 @@
 #define LED3_OUT      11
 #define BODY_SERVO    8
 #define SHUTTLE_MOTOR 9
+#define M1  A0
+#define M2  A1
 
 volatile int top_state = LOW;
 volatile int bottom_state = LOW;
@@ -18,16 +21,16 @@ unsigned char desiredAngle = 30;
 volatile unsigned char servoAngle = 90;
 char servoDir = 0;
 
-uint8_t latest_interrupted_pin;
-uint8_t interrupt_count[20]={0}; // 20 possible arduino pins
+unsigned char latest_interrupted_pin;
+//uint8_t interrupt_count[20]={0}; // 20 possible arduino pins
 
 Servo bodyServo;
 Servo shuttleMotor;
 
-void quicfunc() 
+void pcInt2() 
 {
   latest_interrupted_pin=PCintPort::arduinoPin;
-  interrupt_count[latest_interrupted_pin]++;
+//  interrupt_count[latest_interrupted_pin]++;
 }
 
 void tmr2Int()
@@ -52,13 +55,15 @@ void setup()
   pinMode( LED_OUT, OUTPUT );
   pinMode( LED2_OUT, OUTPUT );
   pinMode( LED3_OUT, OUTPUT );
+  pinMode( M1, OUTPUT );
+  pinMode( M2, OUTPUT );
 
   // Turn on internal pullups  
   digitalWrite(TOP_LIMIT, HIGH);
   digitalWrite(BOTTOM_LIMIT, HIGH );
   
-  PCintPort::attachInterrupt(TOP_LIMIT, &quicfunc, RISING);
-  PCintPort::attachInterrupt(BOTTOM_LIMIT, &quicfunc, FALLING);
+  PCintPort::attachInterrupt(TOP_LIMIT, &pcInt2, RISING);
+  PCintPort::attachInterrupt(BOTTOM_LIMIT, &pcInt2, FALLING);
   
   attachInterrupt( 1, limitSwitchInt, RISING );
   
@@ -97,11 +102,17 @@ void loop()
     {
       desiredAngle = 150;
       shuttleMotor.write(95);
+      digitalWrite(M1, LOW);
+      digitalWrite(M2, LOW);
+      digitalWrite(M1, HIGH);
     }
     else
     {
       desiredAngle = 30;
       shuttleMotor.write(75);
+      digitalWrite(M1, LOW);
+      digitalWrite(M2, LOW);
+      digitalWrite(M2, HIGH);
     }
   }  
   bodyServo.write(servoAngle);
