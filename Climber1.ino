@@ -3,6 +3,7 @@
 #include <PinChangeInt.h>
 #include <FlexiTimer2.h>
 #include <Servo.h>
+#include <EEPROM.h>
 
 #define TOP_LIMIT     5
 #define BOTTOM_LIMIT  6
@@ -17,9 +18,10 @@
 #define SHUTTLE_DOWN_SPEED  700
 #define SHUTTLE_STOP_SPEED  1500
 
-String COMMANDS = "AUDW";
-String IMMEDIATE_COMMANDS = "AUDWTB";
+String COMMANDS = "AUDWTBE";
+String IMMEDIATE_COMMANDS = "AUDWTBE";
 String DEBUG_COMMANDS = "LSCA";
+String ADMIN_COMMANDS = "LSP";
 
 volatile int top_state = LOW;
 volatile int bottom_state = LOW;
@@ -33,10 +35,13 @@ volatile int encoderCount = 0;
 Servo bodyServo;
 Servo shuttleMotor;
 
-boolean immediateMode = true;
+boolean immediateMode = false;
 boolean exitScript = false;
 volatile boolean topLimitPressed = false;
 volatile boolean bottomLimitPressed = false;
+volatile boolean inBodyMove = false;
+
+int eepromCounter = 0;
 
 void pcInt2() 
 {
@@ -54,14 +59,13 @@ void pcInt2()
 
 void tmr2Int()
 {
-  servoAngle += servoDir;
+  if (inBodyMove)
+    servoAngle += servoDir;
 }
 
 void encoderInt()
 {
   encoderCount++;
-//  top_state = !top_state;
-//  digitalWrite( LED2_OUT, top_state );
 }
 
 void setup() 
@@ -75,10 +79,8 @@ void setup()
   pinMode( A0, OUTPUT );
   pinMode( A1, OUTPUT );
   pinMode( A2, OUTPUT );
-//  pinMode( M1, OUTPUT );
-//  pinMode( M2, OUTPUT );
 
-  // Turn on internal pullups  
+  // Turn on internal pullups  ?
   digitalWrite(TOP_LIMIT, HIGH);
   digitalWrite(BOTTOM_LIMIT, HIGH );
   digitalWrite(A0, HIGH);
@@ -102,25 +104,27 @@ void setup()
 void loop() 
 {
   // put your main code here, to run repeatedly: 
-  updateBodyServo();
-  
-  // Check for incoming serial data
-  while (Serial.available() > 0)
-  {
-    handleSerial();
-  }
-}
+//  updateBodyServo();
 
-void updateBodyServo()
-{
-  if (servoAngle > desiredAngle)
-    servoDir = -1;
-  else if (servoAngle < desiredAngle)
-    servoDir = 1;
-  else
-    servoDir = 0;
-    
-  bodyServo.write(servoAngle);
+  Serial.println("Press bottom limit switch to run script");
+  
+  while(1)
+  {
+    // Check for incoming serial data
+    if (Serial.available() > 0)
+      handleSerial();
+  
+    if (bottomLimitPressed && !immediateMode)
+    {  
+      bottomLimitPressed = false;
+      playScript();
+
+      while(1)
+      {
+        delay(1000);
+      }
+    }
+  }
 }
 
 void ledOn(char pos)
@@ -239,14 +243,30 @@ void debugArm()
   exitScript = false;
 }
 
+void updateBodyServo()
+{
+  if (servoAngle > desiredAngle)
+    servoDir = -1;
+  else if (servoAngle < desiredAngle)
+    servoDir = 1;
+  else
+    servoDir = 0;
+    
+  bodyServo.write(servoAngle);
+}
+
 void moveToAngle( int value )
 {
   desiredAngle = value;
+  
+  inBodyMove = true;
   
   while ( servoAngle != desiredAngle )
   {
     updateBodyServo();
   }
+  
+  inBodyMove = false;
 }
 
 void shuttleUpCount( int value )
@@ -257,13 +277,6 @@ void shuttleUpCount( int value )
   while (!exitScript && encoderCount < value && !topLimitPressed)
   {
     shuttleMotor.writeMicroseconds(SHUTTLE_UP_SPEED);
-    /*
-    // Check for incoming serial data
-    if (Serial.available() > 0)
-    {
-      handleSerial();
-    }
-    */
   }
   shuttleMotor.writeMicroseconds(SHUTTLE_STOP_SPEED);
   ledOn(-1);  // Invalid number turns all off and none back on
@@ -280,13 +293,6 @@ void shuttleDownCount( int value )
   while (!exitScript && encoderCount < value && !bottomLimitPressed)
   {
     shuttleMotor.writeMicroseconds(SHUTTLE_DOWN_SPEED);
-    /*
-    // Check for incoming serial data
-    if (Serial.available() > 0)
-    {
-      handleSerial();
-    }
-    */
   }
   shuttleMotor.writeMicroseconds(SHUTTLE_STOP_SPEED);
   ledOn(-1);  // Invalid number turns all off and none back on
@@ -302,66 +308,9 @@ void wait( int seconds )
   ledOn(-1);
 }
 
-void handleSerial()
+void executeCommand( char command, int value )
 {
-  static char lastChar;
-  int value;
-  
-  char c = Serial.read();
-  
-  if ( c != '\r' && c != '\n' & c != ' ' )
-  {
-    Serial.print("Received: ");
-    Serial.print(c);
-    
-    if ( c == 'Q' )
-    {
-      exitScript = true;
-    }
-    else if ( lastChar == '-' )  // debug command
-    {
-//      d = Serial.read();
-      Serial.print("  lastChar: ");
-      Serial.print(lastChar);
-      Serial.print("  Debug: ");
-      Serial.print(c);
-      
-      switch(c)
-      {
-        case 'L':  // print limit switches
-          debugLimit();
-          break;
-          
-        case 'S':  // run shuttle and display counter
-          debugShuttle();
-          break;
-          
-        case 'A':  // Move arm
-          debugArm();
-          break;
-          
-        case 'I':  // Indicator LEDs
-          debugIndicators();
-          break;
-      }
-    }
-    else if ( COMMANDS.indexOf(c) > -1 )
-    {
-      value = Serial.parseInt();
-      Serial.print("   int: ");
-      Serial.println(value);
-    }
-    else
-      Serial.println();
-      
-    lastChar = c;
-  }
-  else
-    return;
-  
-  if (immediateMode && IMMEDIATE_COMMANDS.indexOf(c) > -1)
-  {
-    switch(c)
+    switch(command)
     {
       case 'A':  // move to angle
         moveToAngle(value);
@@ -387,85 +336,146 @@ void handleSerial()
         wait(value);
         break;
     }
-  }
-  
-  /*
-  // Decide what to do with input
-  switch (c)
-  {
-    case 'L':  // Load script.  Script from PC follows
-      break;
-      
-    case 'R':  // Script that follows is reset script
-      break;
-      
-    case 'S':  // Store current buffer as script (regular or reset)
-      break;
-      
-    case 'E':  // End of script
-      break;
-      
-    case 'I':  // Change to Immediate mode
-      break;
-      
-    case 'N':  // Change to Not Immediate mode
-      break;
-      
-    case 'G':  // Run current buffer as script
-      break;
-      
-    case 'X':  // Exit any currently running script
-      break;
-      
-    case 'A':  // Move to angle
-      break;
-      
-    case 'U':  // Shuttle up count or to limit
-      break;
-      
-    case 'T':  // Shuttle to top limit switch
-      break;
-      
-    case 'D':  // Shuttle down count or to limit
-      break;
-      
-    case 'W':  // Delay # of seconds
-      break;
-  }
-  */
 }
-  /*
-  if (latest_interrupted_pin == TOP_LIMIT)
-    digitalWrite(LED_OUT, LOW);
-  else if (latest_interrupted_pin == BOTTOM_LIMIT)
-    digitalWrite(LED_OUT, HIGH);
-  */  
-  /*
-  bodyServo.write(30);
-  delay(2000);
-  bodyServo.write(150);
-  delay(2000);
-  */
 
-/*  
-  if (servoAngle == desiredAngle)
+void storeCommand( char command, int value )
+{
+  EEPROM.write(eepromCounter++, command);
+  EEPROM.write(eepromCounter++, lowByte(value));
+  EEPROM.write(eepromCounter++, highByte(value));
+  
+  if ( command == 'E' )
   {
-    if (desiredAngle == 30)
+    Serial.print("EEPROM bytes written: ");
+    Serial.println(eepromCounter);
+  }
+}
+
+void showScript()
+{
+  char c = ' ';
+  char low;
+  char high;
+  int count = 0;
+  
+  Serial.println();
+  Serial.println("Script start");
+  while (c != 'E' && count < 1023)
+  {
+    c = EEPROM.read(count++);
+    low = EEPROM.read(count++);
+    high = EEPROM.read(count++);
+    Serial.print(c);
+    Serial.println(word(high,low),DEC);
+  }
+  Serial.println("Script end");
+}
+
+void playScript()
+{
+  char c = ' ';
+  char low;
+  char high;
+  int value = 0;
+  int count = 0;
+  
+  Serial.println();
+  Serial.println("Script start");
+  while (c != 'E' && count < 1023)
+  {
+    c = EEPROM.read(count++);
+    low = EEPROM.read(count++);
+    high = EEPROM.read(count++);
+    value = word(high,low);
+    Serial.print(c);
+    Serial.println(value,DEC);
+    executeCommand(c, value);
+  }
+  Serial.println("Script end");
+}
+
+void handleSerial()
+{
+  static char lastChar;
+  int value;
+  
+  char c = Serial.read();
+  
+  if ( c != '\r' && c != '\n' & c != ' ' )
+  {
+    Serial.print("\r\nReceived: ");
+    Serial.print(c);
+    Serial.print("  lastChar: ");
+    Serial.print(lastChar);
+    
+    if ( c == 'Q' )          // Quit any running scripts
+      exitScript = true;
+    else if ( c == 'I' )      // Change to Immediate Mode
     {
-      desiredAngle = 150;
-      shuttleMotor.write(95);
-      digitalWrite(M1, LOW);
-      digitalWrite(M2, LOW);
-      digitalWrite(M1, HIGH);
+      Serial.println("\nImmediate Mode");
+      immediateMode = true;
+    }
+    else if ( c == 'N' )      // Change out of immediate mode
+    {
+      Serial.println("\nNormal Mode");
+      immediateMode = false;
+    }
+    else if ( lastChar == '-' )  // debug command
+    {
+      exitScript = false;
+      Serial.print("  lastChar: ");
+      Serial.print(lastChar);
+      Serial.print("  Debug: ");
+      Serial.print(c);
+      
+      switch(c)
+      {
+        case 'L':  // print limit switches
+          debugLimit();
+          break;
+          
+        case 'S':  // run shuttle and display counter
+          debugShuttle();
+          break;
+          
+        case 'A':  // Move arm
+          debugArm();
+          break;
+          
+        case 'I':  // Indicator LEDs
+          debugIndicators();
+          break;
+      }
+    }
+    else if ( c == 'L' )      // Script follows
+      eepromCounter = 0;
+    else if ( c == 'S' )      // Show script stored in EEPROM
+      showScript();
+    else if ( c == 'P' )      // Play (execute) script stored in EEPROM
+      playScript();
+    else if ( COMMANDS.indexOf(c) > -1 )
+    {
+      value = Serial.parseInt();
+      Serial.print("   int: ");
+      Serial.println(value);
     }
     else
-    {
-      desiredAngle = 30;
-      shuttleMotor.write(75);
-      digitalWrite(M1, LOW);
-      digitalWrite(M2, LOW);
-      digitalWrite(M2, HIGH);
-    }
+      Serial.println();
+      
+    lastChar = c;
   }
-*/  
+  else
+    return;
+  
+  if (IMMEDIATE_COMMANDS.indexOf(c) > -1)
+  {
+    if (immediateMode)
+    {
+      executeCommand(c, value);
+      exitScript = false;
+    }
+    else
+      storeCommand(c, value);
+  }
+}
 
